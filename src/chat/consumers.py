@@ -9,14 +9,19 @@ from .models import Thread, ChatMessage
 class ChatConsumer(AsyncConsumer):
     
     async def websocket_connect(self,event):
-        print("connected", event)
         await self.send({
             "type":"websocket.accept"
         })
         other_user = self.scope['url_route']['kwargs']['username']
         me = self.scope['user']
-        print(other_user,me)
         thread_obj = await self.get_thread(me,other_user)
+        self.thread_obj = thread_obj
+        chat_room = "thread_"+str(thread_obj.id)
+        self.chat_room = chat_room
+        await self.channel_layer.group_add(
+            chat_room,
+            self.channel_name
+        )
         
     async def websocket_receive(self,event):
         print("receive", event)
@@ -32,14 +37,31 @@ class ChatConsumer(AsyncConsumer):
                 'message':msg,
                 'username': username
             }
-            await self.send({
-                "type":"websocket.send",
-                "text":json.dumps(myResponse)
-            })
-    
+            await self.create_new_chat_message(msg)
+            await self.channel_layer.group_send(
+                  self.chat_room,
+                  {
+                      "type":"chat_message",
+                      "text":json.dumps(myResponse)
+                  }
+            )    
+
+    async def chat_message(self,event):
+        print('message',event)
+        await self.send({
+            "type": "websocket.send",
+            "text": event['text']
+        })
+
     async def websocket_disconnect(self,event):
         print("disconnected", event)
     
     @database_sync_to_async
     def get_thread(self,user, other_username):
         return Thread.objects.get_or_new(user,other_username)[0]
+
+    @database_sync_to_async
+    def create_new_chat_message(self, msg):
+        thread_obj = self.thread_obj
+        me = self.scope['user']
+        return ChatMessage.objects.create(thread=thread_obj, user=me, message=msg)
